@@ -1,20 +1,16 @@
 <!doctype html>
 <html lang="ko">
-<head> 
+<head>
   <meta charset="utf-8" />
-  <title>필통 자비스 (Teachable Machine 로컬 모델)</title>
-
+  <title>📚 필통 자비스 (TM 링크 연동)</title>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8.4/dist/teachablemachine-image.min.js"></script>
-
   <style>
     body { font-family: Arial, Helvetica, sans-serif; max-width: 1000px; margin: 28px auto; padding: 0 18px; color:#222; }
     h1 { margin-bottom: 6px; }
     p.lead { color:#555; margin-top:0; }
-
     .controls { margin:18px 0; }
     input[type="file"] { padding:6px; }
-
     #preview { display:flex; flex-wrap:wrap; gap:12px; margin-top:12px; }
     .thumb {
       width:160px; border:1px solid #e0e0e0; border-radius:8px; background:#fff; padding:8px;
@@ -24,18 +20,15 @@
     .thumb img { width:140px; height:140px; object-fit:cover; border-radius:6px; }
     .label { margin-top:8px; font-size:14px; text-align:center; }
     .small { font-size:12px; color:#666; }
-
     #progressWrap { margin-top:12px; height:10px; background:#f0f0f0; border-radius:6px; overflow:hidden; }
     #progress { height:100%; width:0%; background:#4caf50; transition: width .15s ease; }
-
     #log { margin-top:14px; font-family:monospace; color:#333; white-space:pre-wrap; }
-
     #shortage { margin-top:14px; font-weight:bold; font-size:16px; }
   </style>
 </head>
 <body>
   <h1>📚 필통 자비스</h1>
-  <p style=”color:rgb(255, 0,0);”,class="lead">사용법: 연필,지우개,자,가위 이미지를 업로드하면 AI가 판단하고 부족한 학용품을 알려줍니다.(복수 이미지 업로드 가능)</p>
+  <p class="lead">사용법: 연필,자,가위,지우개 사진을 업로드(복수 이미지 가능) 하면 학용품 종류를 판단하고 부족한 학용품을 알려줍니다.</p>
 
   <div class="controls">
     <input id="fileInput" type="file" accept="image/*" multiple>
@@ -48,7 +41,7 @@
   <div id="shortage"></div>
 
   <script>
-    const MODEL_PATH = "./tm-my-image-model/";
+    const MODEL_BASE_URL = "https://teachablemachine.withgoogle.com/models/c24FXvK1R/";
     let model = null;
 
     const fileInput = document.getElementById('fileInput');
@@ -64,7 +57,6 @@
       scissors: 1
     };
 
-
     const displayNames = {
       pencil: "연필",
       eraser: "지우개",
@@ -77,15 +69,19 @@
       logEl.textContent += msg + "\n";
     }
 
-    async function loadModel(){
+    async function loadModelFromLink() {
       try {
-        const modelURL = MODEL_PATH + "model.json";
-        const metadataURL = MODEL_PATH + "metadata.json";
+        const modelURL = MODEL_BASE_URL + "model.json";
+        const metadataURL = MODEL_BASE_URL + "metadata.json";
+        
         model = await tmImage.load(modelURL, metadataURL);
-        
-      } catch (err) {   
-        
-        
+       
+        try {
+          const classes = model.getTotalClasses ? model.getTotalClasses() : null;
+          if (classes) log("클래스 수: " + classes);
+        } catch(e){}
+      } catch (err) {
+       
       }
     }
 
@@ -96,24 +92,37 @@
       return preds;
     }
 
+    function mapClassNameToKey(className) {
+      if (!className) return null;
+      if (thresholds.hasOwnProperty(className)) return className;
+      for (const key in displayNames) {
+        if (displayNames[key] === className) return key;
+      }
+      const norm = className.toString().toLowerCase().replace(/\s+/g,'').replace(/[^a-z0-9\u3131-\u318E\uAC00-\uD7A3]/g,'');
+      for (const key in thresholds) {
+        const knorm = key.toString().toLowerCase().replace(/\s+/g,'').replace(/[^a-z0-9\u3131-\u318E\uAC00-\uD7A3]/g,'');
+        if (knorm === norm) return key;
+        const d = (displayNames[key]||'').toString().toLowerCase().replace(/\s+/g,'').replace(/[^a-z0-9\u3131-\u318E\uAC00-\uD7A3]/g,'');
+        if (d === norm) return key;
+      }
+      return null;
+    }
 
     function renderMissingItems(counts) {
       const shortageDiv = document.getElementById('shortage');
       if (!shortageDiv) return;
-
       const missing = [];
-      for (const label in thresholds) {
-        const have = counts[label] || 0;
+      for (const key in thresholds) {
+        const have = counts[key] || 0;
         if (have === 0) {
-          const name = displayNames[label] || label;
+          const name = displayNames[key] || key;
           missing.push(name);
         }
       }
-
       if (missing.length === 0) {
-        shortageDiv.innerHTML = '<span style="color:green"> 필통구성이 좋습니다.</span>';
+        shortageDiv.innerHTML = '<span style="color:green"> 필통구성이 좋습니다. </span>';
       } else {
-        shortageDiv.innerHTML = `<span style="color:#b33"> 필통이 어딘가 부족해 보입니다. 부족한 항목: ${missing.join(", ")}입니다.</span>`;
+        shortageDiv.innerHTML = `<span style="color:#b33"> 필통이 어딘가 부족해보입니다. 부족한 항목: ${missing.join(", ")}입니다.</span>`;
       }
     }
 
@@ -122,13 +131,15 @@
       logEl.textContent = "";
       document.getElementById('shortage').innerHTML = "";
       if(!files || files.length === 0) return;
-      
+      if(!model){
+        log("모델이 아직 준비되지 않았습니다. 잠시 기다려주세요.");
+        return;
+      }
 
       const arr = Array.from(files);
       let done = 0;
       progressEl.style.width = "0%";
-
-      const counts = {}; 
+      const counts = {};
 
       for(const file of arr){
         const th = document.createElement('div');
@@ -155,16 +166,17 @@
           small.textContent = top3;
           th.appendChild(small);
 
-          
+        
 
-         
-        const label = Object.keys(displayNames).find(key => displayNames[key] === top.className) || top.className;
-        counts[label] = (counts[label] || 0) + 1;
-
+          const mappedKey = mapClassNameToKey(top.className);
+          if (mappedKey) {
+            counts[mappedKey] = (counts[mappedKey] || 0) + 1;
+          } else {
+          }
 
         } catch(err){
           labelDiv.textContent = '오류';
-          
+          log(`에러: ${file.name} - ${err}`);
         }
 
         done++;
@@ -172,7 +184,7 @@
         progressEl.style.width = pct + '%';
       }
 
-  
+      
       renderMissingItems(counts);
     }
 
@@ -185,8 +197,7 @@
       fileInput.value = "";
     });
 
-    loadModel();
+    loadModelFromLink();
   </script>
 </body>
 </html>
-
